@@ -61,7 +61,7 @@ curl -s -X POST -d '{}' http://127.0.0.1:50051/cusf.mainchain.v1.ValidatorServic
 Start the SideBoost node with the light enforcer as its enforcer:
 
 ```bash
-namecoind -enforcer=127.0.0.1:50051
+sideboostd -enforcer=127.0.0.1:50051
 ```
 
 That's the full enforcer's port, so a node already configured for one needs
