@@ -1,0 +1,24 @@
+[package]
+name = "light-enforcer"
+description = "A light BIP300 enforcer for SideBoost: follows ECX over P2P, scanning only for SideBoost's sidechain slot"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+
+[dependencies]
+anyhow = "1.0.102"
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio", "tracing"] }
+bitcoin = { version = "0.32.100", features = ["serde"] }
+clap = { version = "4.5.60", default-features = false, features = ["derive", "std", "help", "usage", "error-context"] }
+futures = "0.3.32"
+hex = { version = "0.4.3", features = ["serde"] }
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.150"
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", default-features = false, features = ["rt-multi-thread", "macros", "net", "io-util", "sync", "time", "signal", "fs"] }
+tracing = "0.1.40"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+
+[profile.release]
+debug = 1
