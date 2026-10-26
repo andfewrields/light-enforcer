@@ -78,6 +78,7 @@ nothing else (but don't run both on the same machine on the same port).
 | `--data-dir` | `~/.light-enforcer/betanet` | where it keeps headers and scan results |
 | `--scan-start-height` | 967,680 | first block downloaded |
 | `--network` | `betanet` | or `regtest`, for tests |
+| `--assume-slot-active` | off | report deposits to slot 83 before it is active (see below) |
 
 More detail in the logs with `RUST_LOG=debug`. The defaults for the start
 height, the confirmations and the slot are constants in
@@ -94,6 +95,30 @@ height, the confirmations and the slot are constants in
 - **Trust is SPV.** It assumes the chain with the most proof of work follows
   ECX's rules. Peers can't fake headers without the hashrate; they can
   withhold blocks, so it asks several and drops slow ones.
+
+## Testing before slot 83 activates: `--assume-slot-active`
+
+To try SideBoost with real ECX deposits before slot 83 is active, this
+reports the slot's deposits as if it were. Off by default; it changes
+nothing about which ECX blocks it follows. Know what it means:
+
+- **Every SideBoost node of the network must use it.** A node behind a full
+  enforcer (or a light one without it) sees none of these deposits, and
+  stops at the first block crediting one (`bad-deposit-unconfirmed`).
+- **The coins can't come back.** Before activation the treasury output
+  (`OP_DRIVECHAIN <83> OP_TRUE`) is anyone-can-spend on ECX, so deposit tiny
+  amounts. ECX rejects bundles for an inactive slot, so withdrawals never
+  pay out; after activation, nothing deposited before is in the treasury.
+- **Its sequence numbers stay ahead of a full enforcer's** after activation
+  (by the deposits before), so a SideBoost chain credited this way only
+  works with it for good, or is dropped at activation.
+
+Before activation, a deposit is the slot's new treasury output, worth its
+value minus that of the treasury output it spends (if any); a treasury spent
+without a new one (swept) starts again from nothing, and a smaller one isn't
+a deposit. At activation the treasury starts again, as a full enforcer's
+does, and from then on the slot's rules are the full enforcer's. The scan is
+redone when the option is switched.
 
 ## How it works
 

@@ -168,6 +168,13 @@ class Test:
                                 "--enable-mempool", "--enable-block-template-server",
                                 f"--coinbase-recipient={self.ecx.getnewaddress()}"])
         wait_until(lambda: self.full("ValidatorService/GetChainTip"), what="the full enforcer")
+        # Assuming the slot active: the same, but for deposits before
+        # activation (started first, as the plain one is restarted below)
+        self.assumed_port = free_port()
+        os.makedirs(os.path.join(self.tmpdir, "assumed"), exist_ok=True)
+        self.spawn("assumed", [light_bin, "--network=regtest", f"--connect=127.0.0.1:{p2p}",
+                               f"--confirmations={self.confirmations}", f"--data-dir={self.tmpdir}/assumed",
+                               f"--serve-addr=127.0.0.1:{self.assumed_port}", "--assume-slot-active"])
         self.spawn("light", [light_bin, "--network=regtest", f"--connect=127.0.0.1:{p2p}",
                              f"--confirmations={self.confirmations}", f"--data-dir={self.tmpdir}/light",
                              f"--serve-addr=127.0.0.1:{self.light_port}"])
@@ -259,9 +266,16 @@ class Test:
         self.start()
         self.log(f"Started, in {self.tmpdir}")
 
-        self.log("Before the slot activates, nothing")
-        self.mine(self.confirmations + 2)
+        self.log("Before the slot activates, nothing, but deposits if assumed active")
+        self.mine(101)
+        early = self.deposit("before-activation", COIN // 10)
+        self.mine(self.confirmations)
         assert self.check() == []
+        tip = self.trusted_tip()
+        wait_until(lambda: self.call(self.assumed_port, "ValidatorService/GetChainTip")["blockHeaderInfo"]["blockHash"]["hex"] == tip,
+                   what="the assumed-active light enforcer's tip")
+        events = self.peg_events(self.assumed_port, tip)
+        assert [(e["deposit"]["sequenceNumber"], e["deposit"]["outpoint"]["txid"]["hex"]) for e in events] == [("0", early)], events
 
         self.log("Slot 83 activates")
         self.activate_slot()
@@ -273,6 +287,10 @@ class Test:
         self.mine(self.confirmations)
         events = self.check()
         assert [e["deposit"]["sequenceNumber"] for e in events] == ["0", "1", "2"], events
+        # Assumed active, the same deposits, numbered after the early one
+        assumed = self.peg_events(self.assumed_port, self.trusted_tip())
+        assert [(e["deposit"]["sequenceNumber"], e["deposit"]["output"]["valueSats"]) for e in assumed] == \
+            [("0", str(COIN // 10))] + [(str(int(e["deposit"]["sequenceNumber"]) + 1), e["deposit"]["output"]["valueSats"]) for e in events], assumed
 
         self.log("A bundle is proposed, voted for and paid out")
         self.full("BlockProducerService/SetWithdrawalBundlePolicy", {"policy": "WITHDRAWAL_BUNDLE_POLICY_KNOWN"})

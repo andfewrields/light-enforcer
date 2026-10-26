@@ -56,6 +56,9 @@ struct Scanned {
     network: String,
     slot: u8,
     scan_start_height: u32,
+    /// Whether the slot was assumed active (`--assume-slot-active`)
+    #[serde(default)]
+    assume_active: bool,
     /// The trusted chain's last scanned block: the tip served
     tip: Option<BlockHash>,
     blocks: HashMap<BlockHash, ScannedBlock>,
@@ -89,19 +92,20 @@ impl Scanner {
             network: node.params.name.to_owned(),
             slot: rules.slot,
             scan_start_height: start_height,
+            assume_active: rules.assume_active,
             ..Scanned::default()
         };
         let scanned = match std::fs::read(&path) {
             Ok(bytes) => match serde_json::from_slice::<Scanned>(&bytes) {
                 Ok(stored)
-                    if (stored.network.as_str(), stored.slot, stored.scan_start_height)
-                        == (fresh.network.as_str(), fresh.slot, fresh.scan_start_height) =>
+                    if (stored.network.as_str(), stored.slot, stored.scan_start_height, stored.assume_active)
+                        == (fresh.network.as_str(), fresh.slot, fresh.scan_start_height, fresh.assume_active) =>
                 {
                     tracing::info!(blocks = stored.blocks.len(), "Loaded scanned blocks");
                     stored
                 }
                 Ok(_) => {
-                    tracing::info!("Scanning again: the stored scan is for another network, slot or start height");
+                    tracing::info!("Scanning again: the stored scan is for another network, slot, start height or --assume-slot-active");
                     fresh
                 }
                 Err(err) => {

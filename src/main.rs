@@ -55,6 +55,13 @@ struct Cli {
     /// Where to keep headers and scanned blocks [default: ~/.light-enforcer/<network>]
     #[arg(long)]
     data_dir: Option<PathBuf>,
+    /// Report deposits to SideBoost's slot even before it is active, as if it
+    /// were, to test SideBoost before activation. Every SideBoost node of the
+    /// network must do the same. Those deposits are anyone-can-spend on ECX
+    /// and can never be withdrawn; their sequence numbers stay in use after
+    /// activation, unlike a full enforcer's.
+    #[arg(long)]
+    assume_slot_active: bool,
 }
 
 #[tokio::main]
@@ -85,7 +92,14 @@ async fn main() -> anyhow::Result<()> {
         slot: SIDEBOOST_SLOT,
         op_drivechain: params.op_drivechain,
         thresholds: params.thresholds,
+        assume_active: cli.assume_slot_active,
     };
+    if rules.assume_active {
+        tracing::warn!(
+            slot = SIDEBOOST_SLOT,
+            "Reporting the slot's deposits as if it were active (--assume-slot-active): they are anyone-can-spend on ECX and can't be withdrawn"
+        );
+    }
 
     let node = Arc::new(node::Node::load(params, &datadir)?);
     let scanner = Arc::new(scanner::Scanner::load(

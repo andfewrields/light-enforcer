@@ -41,6 +41,10 @@ pub struct Rules {
     pub slot: u8,
     pub op_drivechain: u8,
     pub thresholds: Thresholds,
+    /// Report the slot's deposits before it is active (`--assume-slot-active`),
+    /// as if it were. Nothing guards its treasury outputs then: anyone can
+    /// spend them, and they can never be withdrawn.
+    pub assume_active: bool,
 }
 
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
@@ -244,6 +248,11 @@ pub fn connect_block(rules: &Rules, height: u32, block: &Block, mut state: SlotS
                 };
                 if activates {
                     tracing::info!(height, slot = rules.slot, "Sidechain activated in the slot");
+                    // Assumed active before: its treasury starts again (as a
+                    // full enforcer's does), its sequence numbers go on
+                    if rules.assume_active && !state.active {
+                        state.ctip = None;
+                    }
                     // A replaced sidechain leaves its treasury and bundles
                     state.active = true;
                     state.proposals.remove(pos);
@@ -293,8 +302,8 @@ pub fn connect_block(rules: &Rules, height: u32, block: &Block, mut state: SlotS
     });
 
     // Treasury moves: only once the slot is active, since before that its
-    // OP_DRIVECHAIN outputs are ordinary ones
-    if state.active {
+    // OP_DRIVECHAIN outputs are ordinary ones (unless assumed active)
+    if state.active || rules.assume_active {
         for tx in &block.txdata[1..] {
             if let Some(event) = connect_tx(rules, &block_hash, tx, &mut state) {
                 events.push(event);
@@ -312,6 +321,9 @@ fn connect_tx(
     state: &mut SlotState,
 ) -> Option<Event> {
     let txid: Txid = tx.compute_txid();
+    // Before activation, assumed active: nothing guards the treasury, so its
+    // outputs may be swept, or not spent by the next deposit
+    let assumed = rules.assume_active && !state.active;
     let mut treasury_outputs = tx
         .output
         .iter()
@@ -322,7 +334,10 @@ fn connect_tx(
         .as_ref()
         .is_some_and(|ctip| tx.input.iter().any(|input| input.previous_output == ctip.outpoint));
     let Some((vout, new_ctip)) = treasury_outputs.next() else {
-        if spends_ctip {
+        if spends_ctip && assumed {
+            tracing::info!(%block_hash, %txid, "Treasury swept, as the slot isn't active");
+            state.ctip = None;
+        } else if spends_ctip {
             tracing::warn!(%block_hash, %txid, "Treasury spent without a new treasury output");
         }
         return None;
@@ -333,6 +348,8 @@ fn connect_tx(
     }
     let old_value = match &state.ctip {
         Some(ctip) if spends_ctip => ctip.value,
+        // A deposit of all its value, beside the unguarded treasury
+        Some(_) if assumed => 0,
         Some(_) => {
             tracing::warn!(%block_hash, %txid, "New treasury output without spending the old one");
             return None;
@@ -345,6 +362,15 @@ fn connect_tx(
         vout: vout as u32,
     };
     let sequence = state.treasury_count;
+    if assumed && new_value <= old_value {
+        // No payout can come out of an inactive slot: the treasury just moved
+        tracing::info!(%block_hash, %txid, "Treasury moved without a deposit, as the slot isn't active");
+        state.ctip = Some(Ctip {
+            outpoint,
+            value: new_value,
+        });
+        return None;
+    }
     let event = if new_value > old_value {
         // M5: the address follows the treasury output
         let Some(address) = tx.output.get(vout + 1).and_then(deposit_address) else {
@@ -423,6 +449,11 @@ mod tests {
         slot: SLOT,
         op_drivechain: 0xb7,
         thresholds: Thresholds::SHORT,
+        assume_active: false,
+    };
+    const ASSUMED: Rules = Rules {
+        assume_active: true,
+        ..RULES
     };
 
     fn op_return(data: Vec<u8>) -> TxOut {
@@ -560,6 +591,66 @@ mod tests {
         let (events, state) = connect_block(&RULES, 0, &block(vec![], vec![deposit]), SlotState::default());
         assert!(events.is_empty());
         assert_eq!(state.ctip, None);
+    }
+
+    #[test]
+    fn deposits_before_activation_if_assumed_active() {
+        let deposit = tx(vec![outpoint(1)], vec![treasury(1000), op_return(b"addr".to_vec())]);
+        let first_ctip = OutPoint {
+            txid: deposit.compute_txid(),
+            vout: 0,
+        };
+        let (events, state) = connect_block(&ASSUMED, 0, &block(vec![], vec![deposit]), SlotState::default());
+        assert_eq!(
+            events,
+            vec![Event::Deposit {
+                sequence: 0,
+                outpoint: first_ctip,
+                address: b"addr".to_vec(),
+                value: 1000
+            }]
+        );
+        assert!(!state.active);
+
+        // One beside the treasury, not spending it, deposits all its value
+        let beside = tx(vec![outpoint(2)], vec![treasury(700), op_return(b"b".to_vec())]);
+        let (events, state) = connect_block(&ASSUMED, 1, &block(vec![], vec![beside.clone()]), state);
+        assert!(matches!(events[..], [Event::Deposit { sequence: 1, value: 700, .. }]));
+        let ctip = state.ctip.clone().unwrap().outpoint;
+        assert_eq!(ctip.txid, beside.compute_txid());
+
+        // Moved to a smaller output: no payout, no event
+        let smaller = tx(vec![ctip], vec![treasury(100), op_return(b"c".to_vec())]);
+        let (events, state) = connect_block(&ASSUMED, 2, &block(vec![], vec![smaller.clone()]), state);
+        assert!(events.is_empty());
+        assert_eq!(state.ctip.as_ref().unwrap().value, 100);
+        assert_eq!(state.treasury_count, 2);
+
+        // Swept: the next deposit starts from nothing
+        let ctip = state.ctip.clone().unwrap().outpoint;
+        let sweep = tx(vec![ctip], vec![payout(100)]);
+        let again = tx(vec![outpoint(3)], vec![treasury(50), op_return(b"d".to_vec())]);
+        let (events, state) = connect_block(&ASSUMED, 3, &block(vec![], vec![sweep, again]), state);
+        assert!(matches!(events[..], [Event::Deposit { sequence: 2, value: 50, .. }]));
+        assert_eq!(state.treasury_count, 3);
+
+        // Once active, its treasury starts again: the first deposit spends
+        // nothing, as a full enforcer has it, and numbers go on
+        let description = b"SideBoost".to_vec();
+        let hash = bitcoin::hashes::sha256d::Hash::hash(&description).to_byte_array();
+        let (_, mut state) = connect_block(&ASSUMED, 4, &block(vec![message(M1_TAG, SLOT, &description)], vec![]), state);
+        for height in 5..=10 {
+            (_, state) = connect_block(&ASSUMED, height, &block(vec![message(M2_TAG, SLOT, &hash)], vec![]), state);
+        }
+        assert!(state.active);
+        assert_eq!(state.ctip, None);
+        let real = tx(vec![outpoint(4)], vec![treasury(2000), op_return(b"e".to_vec())]);
+        let (events, state) = connect_block(&ASSUMED, 11, &block(vec![], vec![real]), state);
+        assert!(matches!(events[..], [Event::Deposit { sequence: 3, value: 2000, .. }]));
+        // And from then on the slot's rules are the full enforcer's
+        let beside = tx(vec![outpoint(5)], vec![treasury(3000), op_return(b"f".to_vec())]);
+        let (events, _) = connect_block(&ASSUMED, 12, &block(vec![], vec![beside]), state);
+        assert!(events.is_empty());
     }
 
     #[test]
