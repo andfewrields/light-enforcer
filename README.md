@@ -1,100 +1,135 @@
 # light-enforcer
 
-A light BIP300 enforcer for SideBoost. A SideBoost node needs to know what
-happens to its sidechain slot on ECX (deposits, withdrawal bundles); with
-this, it doesn't need a full ECX node and `bip300301_enforcer` for that.
+A light BIP300 enforcer for [SideBoost](../sideboost-core): it lets a
+SideBoost node follow ECX without running a full ECX node.
 
-It connects to the ECX network (betanet) over P2P and:
+## What it is
 
-- downloads all the headers, checking proof of work and difficulty
-  (Bitcoin's adjustment, and betanet's reset at its fork), and follows the
-  chain with the most work;
-- downloads every block from `SCAN_START_HEIGHT` (967,680, betanet's fork
-  from Bitcoin) on, scans it for SideBoost's slot (`SIDEBOOST_SLOT`, 83)
-  only, and discards everything else;
-- assumes every block with more than `--confirmations` (10) confirmations
-  is fully valid, and uses no other: it serves the chain up to the last of
-  them.
+SideBoost is a sidechain of ECX (slot 83). Its coins come in through
+deposits on ECX and leave through withdrawal bundles that ECX miners vote
+on, so every SideBoost node has to know what happens to slot 83 on ECX.
+Normally that takes a full ECX node (hundreds of GB) plus
+`bip300301_enforcer`, which tracks every sidechain.
 
-It serves SideBoost nodes the part of the enforcer's API they use, so a node
-uses it like a full enforcer: `-enforcer=127.0.0.1:50051`.
+`light-enforcer` replaces both with one small program. It:
 
-## Running
+1. **connects to ECX betanet** by itself, finding peers through betanet's
+   DNS seeds;
+2. **downloads all the headers** (about 80 MB), checking proof of work and
+   difficulty, and follows the chain with the most work;
+3. **downloads the blocks from height 967,680** (betanet's fork from Bitcoin)
+   on, **keeps only what concerns slot 83** (its activation, deposits and
+   withdrawal bundles) and discards everything else;
+4. **trusts blocks with more than 10 confirmations** as fully valid, and
+   uses no other.
+
+It answers the SideBoost node exactly as a full enforcer would, so the node
+needs no changes: you only point it at the light enforcer.
+
+## Using it
+
+### 1. Build
+
+Needs Rust 1.88 or later.
 
 ```bash
-cargo build --release --offline
+cargo build --release
+```
+
+The binary is `target/release/light-enforcer`.
+
+### 2. Start it
+
+```bash
 target/release/light-enforcer
 ```
 
-It finds betanet peers through the DNS seeds, keeps its data in
-`~/.light-enforcer/betanet` (headers, about 80 MB, and what it scanned), and
-serves on `127.0.0.1:50051`, the enforcer's port. Options:
+No settings are needed. On the first start it syncs the headers (about 2
+minutes), then scans the blocks (a few minutes); later starts resume in
+seconds. Stop it with Ctrl-C: it saves its progress.
+
+It's ready once it serves a tip, which is 10 blocks below the betanet tip:
+
+```bash
+curl -s -X POST -d '{}' http://127.0.0.1:50051/cusf.mainchain.v1.ValidatorService/GetChainTip
+```
+
+(Before that it answers `Validator is not synced`.)
+
+### 3. Point SideBoost at it
+
+Start the SideBoost node with the light enforcer as its enforcer:
+
+```bash
+namecoind -enforcer=127.0.0.1:50051
+```
+
+That's the full enforcer's port, so a node already configured for one needs
+nothing else (but don't run both on the same machine on the same port).
+
+### Options
 
 | Option | Default | |
 |---|---|---|
-| `--confirmations` | 10 | blocks with more confirmations are assumed valid |
-| `--scan-start-height` | 967,680 | first block downloaded and scanned |
-| `--connect host:port` | DNS seeds | follow these nodes only (repeatable) |
+| `--confirmations N` | 10 | blocks with more than N confirmations are assumed valid |
+| `--connect host:port` | DNS seeds | follow only these ECX nodes (repeatable), e.g. your own |
 | `--max-peers` | 8 | peers to keep when finding them |
-| `--serve-addr` | `127.0.0.1:50051` | where to serve the API |
-| `--data-dir` | `~/.light-enforcer/<network>` | |
-| `--network` | `betanet` | or `regtest` (the betanet build's), for tests |
+| `--serve-addr` | `127.0.0.1:50051` | where SideBoost reaches it |
+| `--data-dir` | `~/.light-enforcer/betanet` | where it keeps headers and scan results |
+| `--scan-start-height` | 967,680 | first block downloaded |
+| `--network` | `betanet` | or `regtest`, for tests |
 
-The two settings live in [`src/params.rs`](src/params.rs): `SCAN_START_HEIGHT`
-and `DEFAULT_CONFIRMATIONS`. Changing the start height scans again from it.
+More detail in the logs with `RUST_LOG=debug`. The defaults for the start
+height, the confirmations and the slot are constants in
+[`src/params.rs`](src/params.rs) (`SCAN_START_HEIGHT`,
+`DEFAULT_CONFIRMATIONS`, `SIDEBOOST_SLOT`).
 
-## What it follows
+## What to know
 
-The slot's events as a full enforcer reports them, following its
-`connect_block` for the one slot ([`src/bip300.rs`](src/bip300.rs)):
+- **It can't mine.** Proposing withdrawal bundles to ECX and voting for them
+  are done by ECX miners with a full enforcer. A SideBoost node on a light
+  enforcer only logs a debug message when it tries.
+- **Its view of ECX is 10 blocks behind** a full enforcer's, so deposits
+  reach a SideBoost node on it about 100 minutes later.
+- **Trust is SPV.** It assumes the chain with the most proof of work follows
+  ECX's rules. Peers can't fake headers without the hashrate; they can
+  withhold blocks, so it asks several and drops slow ones.
 
-- the slot's proposals and activation (M1, M2): before it activates, its
-  treasury outputs are ordinary outputs;
-- deposits (M5) and bundle payouts (M6), each a new treasury output with the
-  next sequence number;
-- bundles proposed (M3), and bundles that expire (`failed`).
+## How it works
 
-Bundle votes (M4) aren't counted: they would need every slot's bundles, and
-a payout is seen paying out anyway. What a full enforcer would reject a block
-for is only logged, since the blocks used are assumed valid.
+| File | |
+|---|---|
+| [`src/params.rs`](src/params.rs) | networks (betanet, regtest) and the settings |
+| [`src/chain.rs`](src/chain.rs) | header chain: checks, most-work chain |
+| [`src/p2p.rs`](src/p2p.rs), [`src/node.rs`](src/node.rs) | peers, header sync, block downloads |
+| [`src/bip300.rs`](src/bip300.rs) | BIP300 for one slot: its events in a block |
+| [`src/scanner.rs`](src/scanner.rs) | scans the trusted chain, handles reorgs, saves results |
+| [`src/server.rs`](src/server.rs) | the API SideBoost calls |
 
-The start height must be below any event of the slot: what happened to it
-before is unknown. Nothing BIP300 happened on betanet before its fork from
-Bitcoin at 967,680, so it starts there.
+For slot 83 it follows the enforcer's rules: proposals and activation (M1,
+M2; before activation, treasury outputs are ordinary outputs), deposits
+(M5) and payouts (M6), each a new treasury output with the next sequence
+number, bundles proposed (M3), and bundles that expire. Bundle votes (M4)
+aren't counted, since a payout is seen when it happens.
 
-## API
-
-The JSON form of the Connect protocol over HTTP/1.1, as SideBoost's
-`EnforcerClient` calls it (POST `/cusf.mainchain.v1.<Service>/<Method>`):
-
-- `ValidatorService/GetChainTip`: the last block assumed valid, once scanned
-- `ValidatorService/GetBlockHeaderInfo`: any header, with ancestors
-- `ValidatorService/GetTwoWayPegData`: slot 83's events, by block
-
-Anything else is answered as unimplemented, including the block producer: a
-light enforcer can't mine, so it can't propose withdrawal bundles or vote
-for them (a SideBoost node's proposals only log a debug message).
-
-## Trust
-
-SPV: the chain with the most work, from peers it found itself, is assumed
-to follow ECX's rules, BIP300's included, once blocks are 10 deep. Peers
-can't forge headers without the hashrate, but can withhold blocks; it asks
-several.
-
-A SideBoost node on a light enforcer sees ECX 10 blocks later than one on a
-full enforcer, so its deposit confirmations (3) count from there.
+It serves three calls, in the JSON form of the Connect protocol as
+SideBoost's client makes them (POST `/cusf.mainchain.v1.<Service>/<Method>`):
+`ValidatorService/GetChainTip`, `GetBlockHeaderInfo` and `GetTwoWayPegData`
+(slot 83 only). Anything else is answered as unimplemented.
 
 ## Tests
 
 ```bash
-cargo test --offline
-tests/compare_with_enforcer.py [--confirmations 3]
+cargo test
+tests/compare_with_enforcer.py
 ```
 
-The second runs an ECX regtest node, a full enforcer that mines on it and
-the light enforcer, and checks that the light enforcer serves the right tip
-and answers exactly as the full enforcer does, through the slot's
-activation, deposits, a bundle paid out, one expiring, a reorganization and
-a restart. It needs `ECX_BITCOIND` and `BIP300301_ENFORCER` (default: the
-builds next to this repository).
+The second starts an ECX regtest node, a full `bip300301_enforcer` that
+mines on it, and the light enforcer, then checks that both answer the same
+through slot 83's activation, deposits, a bundle paid out, one expiring, a
+reorganization and a restart. It needs the ECX and enforcer builds, from
+`ECX_BITCOIND` and `BIP300301_ENFORCER` or next to this repository.
+
+## License
+
+MIT, see [COPYING](COPYING).
