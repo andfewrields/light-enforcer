@@ -20,7 +20,7 @@ Normally that takes a full ECX node (hundreds of GB) plus
 3. **downloads the blocks from height 967,680** (betanet's fork from Bitcoin)
    on, **keeps only what concerns slot 83** (its activation, deposits and
    withdrawal bundles) and discards everything else;
-4. **trusts blocks with more than 10 confirmations** as fully valid, and
+4. **trusts blocks with more than 7 confirmations** as fully valid, and
    uses no other.
 
 It answers the SideBoost node exactly as a full enforcer would, so the node
@@ -48,7 +48,7 @@ No settings are needed. On the first start it syncs the headers (about 2
 minutes), then scans the blocks (a few minutes); later starts resume in
 seconds. Stop it with Ctrl-C: it saves its progress.
 
-It's ready once it serves a tip, which is 10 blocks below the betanet tip:
+It's ready once it serves a tip, which is 7 blocks below the betanet tip:
 
 ```bash
 curl -s -X POST -d '{}' http://127.0.0.1:50051/cusf.mainchain.v1.ValidatorService/GetChainTip
@@ -71,7 +71,7 @@ nothing else (but don't run both on the same machine on the same port).
 
 | Option | Default | |
 |---|---|---|
-| `--confirmations N` | 10 | blocks with more than N confirmations are assumed valid |
+| `--confirmations N` | 7 | blocks with more than N confirmations are assumed valid |
 | `--connect host:port` | DNS seeds | follow only these ECX nodes (repeatable), e.g. your own |
 | `--max-peers` | 8 | peers to keep when finding them |
 | `--serve-addr` | `127.0.0.1:50051` | where SideBoost reaches it |
@@ -90,8 +90,12 @@ height, the confirmations and the slot are constants in
 - **It can't mine.** Proposing withdrawal bundles to ECX and voting for them
   are done by ECX miners with a full enforcer. A SideBoost node on a light
   enforcer only logs a debug message when it tries.
-- **Its view of ECX is 10 blocks behind** a full enforcer's, so deposits
-  reach a SideBoost node on it about 100 minutes later.
+- **Its view of ECX is 7 blocks behind** a full enforcer's, so deposits
+  reach a SideBoost node on it about 70 minutes later.
+- **Miners should use the same `--confirmations`.** A miner trusting fewer
+  confirmations credits deposits before other nodes see them; they reject its
+  blocks until they catch up, so its blocks are orphaned (or, with most of
+  the hashrate, it causes a deep reorg).
 - **Trust is SPV.** It assumes the chain with the most proof of work follows
   ECX's rules. Peers can't fake headers without the hashrate; they can
   withhold blocks, so it asks several and drops slow ones.
