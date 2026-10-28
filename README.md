@@ -20,11 +20,14 @@ Normally that takes a full ECX node (hundreds of GB) plus
 3. **downloads the blocks from height 967,680** (betanet's fork from Bitcoin)
    on, **keeps only what concerns slot 83** (its activation, deposits and
    withdrawal bundles) and discards everything else;
-4. **trusts blocks with more than 7 confirmations** as fully valid, and
-   uses no other.
+4. **serves the chain up to its tip**, as a full enforcer does, trusting
+   its blocks as fully valid.
 
 It answers the SideBoost node exactly as a full enforcer would, so the node
-needs no changes: you only point it at the light enforcer.
+needs no changes: you only point it at the light enforcer. A SideBoost node
+on it credits a deposit at the same ECX block as one on a full enforcer:
+once SideBoost's own rule is met, 3 ECX blocks on top of the deposit's
+(4 confirmations).
 
 ## Using it
 
@@ -48,7 +51,7 @@ No settings are needed. On the first start it syncs the headers (about 2
 minutes), then scans the blocks (a few minutes); later starts resume in
 seconds. Stop it with Ctrl-C: it saves its progress.
 
-It's ready once it serves a tip, which is 7 blocks below the betanet tip:
+It's ready once it serves a tip, the betanet tip:
 
 ```bash
 curl -s -X POST -d '{}' http://127.0.0.1:50051/cusf.mainchain.v1.ValidatorService/GetChainTip
@@ -71,7 +74,7 @@ nothing else (but don't run both on the same machine on the same port).
 
 | Option | Default | |
 |---|---|---|
-| `--confirmations N` | 7 | blocks with more than N confirmations are assumed valid |
+| `--confirmations N` | 0 | serve only blocks with more than N confirmations (0: up to the tip, as a full enforcer) |
 | `--connect host:port` | DNS seeds | follow only these ECX nodes (repeatable), e.g. your own |
 | `--max-peers` | 8 | peers to keep when finding them |
 | `--serve-addr` | `127.0.0.1:50051` | where SideBoost reaches it |
@@ -90,15 +93,16 @@ height, the confirmations and the slot are constants in
 - **It can't mine.** Proposing withdrawal bundles to ECX and voting for them
   are done by ECX miners with a full enforcer. A SideBoost node on a light
   enforcer only logs a debug message when it tries.
-- **Its view of ECX is 7 blocks behind** a full enforcer's, so deposits
-  reach a SideBoost node on it about 70 minutes later.
-- **Miners should use the same `--confirmations`.** A miner trusting fewer
-  confirmations credits deposits before other nodes see them; they reject its
-  blocks until they catch up, so its blocks are orphaned (or, with most of
-  the hashrate, it causes a deep reorg).
+- **It sees ECX as a full enforcer does**, so SideBoost nodes agree on
+  which blocks are valid whichever enforcer each uses. `--confirmations`
+  above 0 makes its view lag: a node on it then rejects (reversibly) blocks
+  crediting deposits it doesn't see yet, and a miner on it would see its
+  blocks orphaned. Leave it at 0 to mine.
 - **Trust is SPV.** It assumes the chain with the most proof of work follows
   ECX's rules. Peers can't fake headers without the hashrate; they can
-  withhold blocks, so it asks several and drops slow ones.
+  withhold blocks, so it asks several and drops slow ones. A deposit only
+  counts on SideBoost with 3 ECX blocks on top, so faking one takes 4
+  blocks' worth of ECX proof of work.
 
 ## Testing before slot 83 activates: `--assume-slot-active`
 

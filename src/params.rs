@@ -19,8 +19,11 @@ pub const SCAN_START_HEIGHT: u32 = 967_680;
 
 /// Blocks with more confirmations than this (the tip has 1) are assumed
 /// fully valid, and the light enforcer uses no other: it serves the chain up
-/// to the last of them. `--confirmations` overrides it.
-pub const DEFAULT_CONFIRMATIONS: u32 = 7;
+/// to the last of them. `--confirmations` overrides it. By default it serves
+/// the tip, as a full enforcer does, so a SideBoost node on it credits
+/// deposits at the same ECX block as one on a full enforcer: SideBoost itself
+/// waits for 3 ECX blocks on top of a deposit's (4 confirmations).
+pub const DEFAULT_CONFIRMATIONS: u32 = 0;
 
 /// BIP300's ages and vote thresholds, in blocks, as the enforcer has them
 /// (`Thresholds` in bip300301_enforcer). Only those the light enforcer needs

@@ -11,7 +11,7 @@ expire; the parent chain reorganizes. Throughout, the light enforcer must
 serve the chain up to the last block with more than --confirmations
 confirmations, and answer exactly as the full enforcer does for it.
 
-    tests/compare_with_enforcer.py [--confirmations 3] [--tmpdir DIR]
+    tests/compare_with_enforcer.py [--confirmations N] [--tmpdir DIR]
 
 Binaries, from the environment or next to this repository:
 ECX_BITCOIND (../ecash-bitcoin/build/bin/bitcoind), BIP300301_ENFORCER
@@ -361,7 +361,7 @@ class Test:
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--confirmations", type=int, default=3)
+    parser.add_argument("--confirmations", type=int, default=0)
     parser.add_argument("--tmpdir")
     parser.add_argument("--keep", action="store_true", help="keep the temporary directory")
     test = Test(parser.parse_args())

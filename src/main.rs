@@ -36,7 +36,7 @@ struct Cli {
     #[arg(long, default_value = "betanet")]
     network: String,
     /// Blocks with more confirmations than this are assumed fully valid;
-    /// no other block is used
+    /// no other block is used (0: up to the tip, as a full enforcer)
     #[arg(long, default_value_t = DEFAULT_CONFIRMATIONS)]
     confirmations: u32,
     /// The first block to download and scan, if not the network's
